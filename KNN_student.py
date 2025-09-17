@@ -9,28 +9,59 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
 from time import perf_counter
+
+from conda.common.logic import FALSE
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, top_k_accuracy_score
 
 # ========= 本地数据目录（改成你的路径） =========
-DATA_DIR = r"E:\CSProgram\DL\DL-CLASS-main\pj1-KNN\KNN"
+DATA_DIR = r"/Users/le/PycharmProjects/DL/KNN"
 
 # ========= 可调参数 =========
 RANDOM_STATE = 42
 TRAIN_N = 60000   # 设小一点（如 12000）可更快
 TEST_N  = 10000   # 设小一点（如 2000）可更快
-USE_PCA = False
+USE_PCA = True
+USE_SKLEARN_BASELINE = False
 N_COMP  = 50
 K_LIST  = (1,3,5,7,9)
 TOPK    = 5  # None 则跳过 top-k
 
 # ========= 工具 =========
-def summarize(results, title):
+def summarize(title, results):
     print("\n" + title)
-    print(f"k\tacc\t\tfit_time(s)\tpredict_time(s)\ttop{TOPK if TOPK else 'N'}_acc")
+
+    headers = ["k", "acc", "pred_time(s)"]
+    if any("fit_time_s" in r for r in results):
+        headers.insert(2, "fit_time_s")
+    if TOPK is not None and any(f'top{TOPK}_acc' in r for r in results):
+        headers.append(f"top{TOPK}_acc")
+
+    print("\t".join(headers))
+
     for r in results:
-        print(f"{r['k']}\t{r['acc']:.4f}\t\t{r['fit_time_s']:.2f}\t\t{r['pred_time_s']:.2f}\t\t{r.get(f'top{TOPK}_acc')}")
+        k_val = r.get('k', 'N/A')
+        acc_val = r.get('acc', 'N/A')
+        pred_time_val = r.get('pred_time_s', 'N/A')
+        fit_time_val = r.get('fit_time_s', 'N/A') if 'fit_time(s)' in headers else None
+        topk_val = r.get(f'top{TOPK}_acc', 'N/A') if TOPK and f'top{TOPK}_acc' in headers else None
+
+        acc_str = f"{acc_val:.4f}" if isinstance(acc_val, float) else str(acc_val)
+        pred_time_str = f"{pred_time_val:.2f}" if isinstance(pred_time_val, float) else str(pred_time_val)
+
+        row = [str(k_val), acc_str, pred_time_str]
+        if fit_time_val is not None:
+            fit_time_str = f"{fit_time_val:.2f}" if isinstance(fit_time_val, float) else str(fit_time_val)
+            row.insert(2, fit_time_str)
+        if topk_val is not None:
+            topk_str = f"{topk_val:.4f}" if isinstance(topk_val, float) else str(topk_val)
+            row.append(topk_str)
+
+        print("\t".join(row))
+    # print(f"k\tacc\t\tfit_time(s)\tpredict_time(s)\ttop{TOPK if TOPK else 'N'}_acc")
+    # for r in results:
+    #     print(f"{r['k']}\t{r['acc']:.4f}\t\t{r['fit_time_s']:.2f}\t\t{r['pred_time_s']:.2f}\t\t{r.get(f'top{TOPK}_acc')}")
 
 def _open_auto(path):
     return gzip.open(path, "rb") if path.lower().endswith(".gz") else open(path, "rb")
@@ -182,21 +213,21 @@ def run_sklearn_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
     """
 
 
-    rows = []                       # 存储每个K值的实验结果
-    for k in k_list:                # 遍历k_list中每个K值
+    rows = []                               # 存储每个K值的实验结果
+    for k in k_list:                        # 遍历k_list中每个K值
         clf = KNeighborsClassifier(n_neighbors=k, algorithm="auto")  # TODO: metric='minkowski', p=1/2, weights
-                                    # 使用sklearn库中的KNN分类器实例
-        t0 = perf_counter()         # 记录训练开始时间
-        clf.fit(Xtr, ytr)           # 训练
-        fit_t = perf_counter() - t0 # 计算训练耗时
+                                            # 使用sklearn库中的KNN分类器实例
+        t0 = perf_counter()                 # 记录训练开始时间
+        clf.fit(Xtr, ytr)                   # 训练
+        fit_t = perf_counter() - t0         # 计算训练耗时
 
-        t0 = perf_counter()         # 记录预测开始时间
-        y_pred = clf.predict(Xte)   # 使用训练好的模型预测测试集
-        pred_t = perf_counter() - t0# 计算预测耗时
+        t0 = perf_counter()                 # 记录预测开始时间
+        y_pred = clf.predict(Xte)           # 使用训练好的模型预测测试集
+        pred_t = perf_counter() - t0        # 计算预测耗时
 
         acc = accuracy_score(yte, y_pred)   # 计算预测准确率
 
-        topk_acc = None             # 初始化top-k准确率
+        topk_acc = None                     # 初始化top-k准确率
         if TOPK is not None:
             try:
                 proba = clf.predict_proba(Xte)
@@ -204,8 +235,14 @@ def run_sklearn_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
             except Exception:
                 topk_acc = None
 
-        rows.append([f"k={k}", f"acc={acc:.4f}", f"fit={fit_t:.2f}s", f"pred={pred_t:.2f}s", f"top{TOPK}={topk_acc}"])
-    summarize("== sklearn KNN summary ==", rows, header="k\tacc\tfit\tpred\ttopk")
+        rows.append({
+            'k': k,
+            'acc': acc,
+            'fit_time_s': fit_t,
+            'pred_time_s': pred_t,
+            f'top{TOPK}_acc': topk_acc
+        })
+    summarize("== sklearn KNN summary ==", rows)
     return
 
 # ========= 从零实现的 KNN（学生核心练习）=========
@@ -216,45 +253,77 @@ class MyKNN:
         self.k = k
         self.Xtr = None
         self.ytr = None
+        self.classed = None
 
     def fit(self, X, y):
         self.Xtr = X
         self.ytr = y
+        self.classed = np.unique(y)
 
     def _pairwise_distances(self, X):
         """
-        TODO（学生完成）：返回 (Nt, N) 的 L2平方距离矩阵
+        （已完成）TODO（学生完成）：返回 (Nt, N) 的 L2平方距离矩阵
                   提示：使用向量化：(a-b)^2 = a^2 + b^2 - 2ab
         """
         # 占位：低效写法，保证可运行；完成后请改成向量化
-        Nt = X.shape[0]
-        N  = self.Xtr.shape[0]
-        dist2 = np.zeros((Nt, N), dtype=np.float32)
-        for i in range(Nt):
-            diff = self.Xtr - X[i]
-            dist2[i] = np.sum(diff * diff, axis=1)
-        return dist2
+        # Nt = X.shape[0]
+        # N  = self.Xtr.shape[0]
+        # dist2 = np.zeros((Nt, N), dtype=np.float32)
+        # for i in range(Nt):
+        #     diff = self.Xtr - X[i]
+        #     dist2[i] = np.sum(diff * diff, axis=1)
+        # 向量化实现 （）
+        # 测试集及训练集的平方和
+        X_sq = np.sum(X**2, axis=1, keepdims=True)
+        Xtr_sq = np.sum(self.Xtr**2, axis=1)
+        dot_product = X @ self.Xtr.T
+        dist2 = X_sq + Xtr_sq - 2 * dot_product
+
+        return np.maximum(dist2, 0)
 
     def _majority_vote(self, labels_1d):
         """
-        TODO（学生完成）：多数票；平票时取“票数大且类别索引小”的
+        (已完成) TODO（学生完成）：多数票；平票时取“票数大且类别索引小”的
         """
-        cnt = Counter(labels_1d.tolist())
-        return sorted(cnt.items(), key=lambda t: (-t[1], t[0]))[0][0]
+        if len(labels_1d) == 0:
+            return 0
+        unique, counts = np.unique(labels_1d, return_counts=True)
+        max_count = np.argmax(counts)
+        candidate = unique[max_count]
+        return np.min(candidate)
 
     def predict(self, X):
         """
-        TODO（学生完成）：
+        (已完成) TODO（学生完成）：
           - 用 np.argpartition 取每行前k小索引
           - 多数票得到预测标签
         """
         dist2 = self._pairwise_distances(X)
-        idx = np.argpartition(dist2, kth=range(self.k), axis=1)[:, : self.k]
+        idx = np.argpartition(dist2, self.k - 1, axis=1)[:, : self.k]
         neigh_labels = self.ytr[idx]
-        y_pred = np.empty(neigh_labels.shape[0], dtype=self.ytr.dtype)
-        for i in range(neigh_labels.shape[0]):
-            y_pred[i] = self._majority_vote(neigh_labels[i])
+        y_pred = np.apply_along_axis(self._majority_vote, axis=1, arr=neigh_labels)
+        # y_pred = np.empty(neigh_labels.shape[0], dtype=self.ytr.dtype)
+        # for i in range(neigh_labels.shape[0]):
+        #     y_pred[i] = self._majority_vote(neigh_labels[i])
         return y_pred
+
+    def _top_k_predictions(self, neigh_labels, top_k):
+        n_samples = neigh_labels.shape[0]
+        top_k_preds = np.zeros((n_samples, top_k), dtype = np.int64)
+
+        for i in range(n_samples):
+            unique, counts = np.unique(neigh_labels[i], return_counts=True)
+
+            sorted_indices = np.argsort(-counts)
+            sorted_classed = unique[sorted_indices]
+
+            if len(sorted_classed) < top_k:
+                padding = np.full(top_k - len(sorted_classed), -1)
+                top_k_preds[i] = np.concatenate((sorted_classed, padding))
+            else:
+                top_k_preds[i] = sorted_classed[:top_k]
+
+        return top_k_preds
 
 def run_my_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
     """
@@ -269,12 +338,20 @@ def run_my_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
         model.fit(Xtr, ytr)
 
         t0 = perf_counter()
+
         y_pred = model.predict(Xte)
         pred_t = perf_counter() - t0
+        print(f"已完成 k={k}的训练和预测")
+        print(f"训练花费{pred_t}秒")
 
         acc = accuracy_score(yte, y_pred)
-        rows.append([f"k={k}", f"acc={acc:.4f}", f"pred={pred_t:.2f}s"])
-    summarize("== MyKNN summary ==", rows, header="k\tacc\tpred")
+
+        rows.append({
+            'k': k,
+            'acc': acc,
+            'pred_time_s': pred_t
+        })
+    summarize("== MyKNN summary ==", rows)
     return
 
 # ========= 混淆矩阵 =========
