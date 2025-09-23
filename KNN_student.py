@@ -10,23 +10,25 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from time import perf_counter
 
-from conda.common.logic import FALSE
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, top_k_accuracy_score
 
 # ========= 本地数据目录（改成你的路径） =========
-DATA_DIR = r"/Users/le/PycharmProjects/DL/KNN"
+DATA_DIR = r"E:\CSProgram\DL\DL-CLASS-main\pj1-KNN\KNN"
 
 # ========= 可调参数 =========
 RANDOM_STATE = 42
 TRAIN_N = 60000   # 设小一点（如 12000）可更快
 TEST_N  = 10000   # 设小一点（如 2000）可更快
 USE_PCA = True
-USE_SKLEARN_BASELINE = False
+USE_SKLEARN_BASELINE = True
 N_COMP  = 50
 K_LIST  = (1,3,5,7,9)
 TOPK    = 5  # None 则跳过 top-k
+METRIC = False
+P = True
+Weight = False
 
 # ========= 工具 =========
 def summarize(title, results):
@@ -52,16 +54,13 @@ def summarize(title, results):
 
         row = [str(k_val), acc_str, pred_time_str]
         if fit_time_val is not None:
-            fit_time_str = f"{fit_time_val:.2f}" if isinstance(fit_time_val, float) else str(fit_time_val)
+            fit_time_str = f"{fit_time_val:.3f}" if isinstance(fit_time_val, float) else str(fit_time_val)
             row.insert(2, fit_time_str)
         if topk_val is not None:
             topk_str = f"{topk_val:.4f}" if isinstance(topk_val, float) else str(topk_val)
             row.append(topk_str)
 
         print("\t".join(row))
-    # print(f"k\tacc\t\tfit_time(s)\tpredict_time(s)\ttop{TOPK if TOPK else 'N'}_acc")
-    # for r in results:
-    #     print(f"{r['k']}\t{r['acc']:.4f}\t\t{r['fit_time_s']:.2f}\t\t{r['pred_time_s']:.2f}\t\t{r.get(f'top{TOPK}_acc')}")
 
 def _open_auto(path):
     return gzip.open(path, "rb") if path.lower().endswith(".gz") else open(path, "rb")
@@ -196,37 +195,28 @@ def pca_reduce(Xtr, Xte, n_components=50):
 
 # ========= sklearn 的 KNN baseline =========
 def run_sklearn_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
-    """
-    Xtr:训练集特征
-    ytr:训练集标签
-    Xte:测试集特征
-    yte:测试集标签
-    k_list:K值列表，默认为1，3，5，7，9
-    """
-
-    """
-    TODO（学生可选）：
-      - 比较 metric/p/weights
-      - 计时 fit/predict
-        使用time()记时训练及预测过程
-      - 计算 top-k 精度（TOPK不为None）
-    """
-
 
     rows = []                               # 存储每个K值的实验结果
     for k in k_list:                        # 遍历k_list中每个K值
-        clf = KNeighborsClassifier(n_neighbors=k, algorithm="auto")  # TODO: metric='minkowski', p=1/2, weights
-                                            # 使用sklearn库中的KNN分类器实例
+        base_param = {
+            'n_neighbors': k,
+            'algorithm': 'auto'
+        }
+        if METRIC:
+            base_param['metric'] = 'minkowski'
+        if P:
+            base_param['p'] = 2
+        if Weight:
+            base_param['weights'] = 'uniform'
+        clf = KNeighborsClassifier(**base_param)
+
         t0 = perf_counter()                 # 记录训练开始时间
         clf.fit(Xtr, ytr)                   # 训练
         fit_t = perf_counter() - t0         # 计算训练耗时
-
         t0 = perf_counter()                 # 记录预测开始时间
         y_pred = clf.predict(Xte)           # 使用训练好的模型预测测试集
         pred_t = perf_counter() - t0        # 计算预测耗时
-
         acc = accuracy_score(yte, y_pred)   # 计算预测准确率
-
         topk_acc = None                     # 初始化top-k准确率
         if TOPK is not None:
             try:
@@ -234,14 +224,17 @@ def run_sklearn_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
                 topk_acc = top_k_accuracy_score(yte, proba, k=TOPK, labels=clf.classes_)
             except Exception:
                 topk_acc = None
-
+        print("fit_t:", fit_t)
+        print("pred_t:", pred_t)
+        print("topk_acc:", topk_acc)
         rows.append({
             'k': k,
             'acc': acc,
-            'fit_time_s': fit_t,
+            #'fit_time_s': fit_t,
             'pred_time_s': pred_t,
             f'top{TOPK}_acc': topk_acc
         })
+        print(rows)
     summarize("== sklearn KNN summary ==", rows)
     return
 
@@ -250,6 +243,7 @@ class MyKNN:
     """最小可用 KNN（L2 距离；多数票）"""
 
     def __init__(self, k=5):
+        self.n_classes_ = None
         self.k = k
         self.Xtr = None
         self.ytr = None
@@ -259,21 +253,9 @@ class MyKNN:
         self.Xtr = X
         self.ytr = y
         self.classed = np.unique(y)
+        self.n_classes_ = len(self.classed)
 
     def _pairwise_distances(self, X):
-        """
-        （已完成）TODO（学生完成）：返回 (Nt, N) 的 L2平方距离矩阵
-                  提示：使用向量化：(a-b)^2 = a^2 + b^2 - 2ab
-        """
-        # 占位：低效写法，保证可运行；完成后请改成向量化
-        # Nt = X.shape[0]
-        # N  = self.Xtr.shape[0]
-        # dist2 = np.zeros((Nt, N), dtype=np.float32)
-        # for i in range(Nt):
-        #     diff = self.Xtr - X[i]
-        #     dist2[i] = np.sum(diff * diff, axis=1)
-        # 向量化实现 （）
-        # 测试集及训练集的平方和
         X_sq = np.sum(X**2, axis=1, keepdims=True)
         Xtr_sq = np.sum(self.Xtr**2, axis=1)
         dot_product = X @ self.Xtr.T
@@ -292,20 +274,30 @@ class MyKNN:
         candidate = unique[max_count]
         return np.min(candidate)
 
-    def predict(self, X):
-        """
-        (已完成) TODO（学生完成）：
-          - 用 np.argpartition 取每行前k小索引
-          - 多数票得到预测标签
-        """
+    def predict(self, X, return_proba = False, top_k = None):
+
         dist2 = self._pairwise_distances(X)
         idx = np.argpartition(dist2, self.k - 1, axis=1)[:, : self.k]
         neigh_labels = self.ytr[idx]
         y_pred = np.apply_along_axis(self._majority_vote, axis=1, arr=neigh_labels)
-        # y_pred = np.empty(neigh_labels.shape[0], dtype=self.ytr.dtype)
-        # for i in range(neigh_labels.shape[0]):
-        #     y_pred[i] = self._majority_vote(neigh_labels[i])
+
+        if return_proba:
+            return y_pred, self._get_proba(neigh_labels)
+        elif top_k is not None:
+            return y_pred, self._top_k_predictions(neigh_labels, top_k)
+
         return y_pred
+
+    def _get_proba(self, neigh_labels):
+        n_samples = neigh_labels.shape[0]
+        proba = np.zeros((n_samples, len(self.classed)), dtype=np.float32)
+
+        for i in range(n_samples):
+            unique, counts = np.unique(neigh_labels[i], return_counts=True)
+            for cls, cnt in zip(unique, counts):
+                cls_idx = np.where(self.classed == cls)[0][0]
+                proba[i, cls_idx] = cnt / self.k
+        return proba
 
     def _top_k_predictions(self, neigh_labels, top_k):
         n_samples = neigh_labels.shape[0]
@@ -326,31 +318,28 @@ class MyKNN:
         return top_k_preds
 
 def run_my_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9)):
-    """
-    TODO（学生完成）：
-      - 计时预测
-      - 比较不同 k 的准确率
-      - （可选）Top-k 精度
-    """
+
     rows = []
     for k in k_list:
         model = MyKNN(k=k)
         model.fit(Xtr, ytr)
-
         t0 = perf_counter()
-
-        y_pred = model.predict(Xte)
+        if TOPK is not None:
+            y_pred, proba = model.predict(Xte, return_proba=True)
+            topk_acc = top_k_accuracy_score(yte, proba, k = TOPK, labels=model.classed)
+        else:
+            y_pred = model.predict(Xte)
+            topk_acc = None
         pred_t = perf_counter() - t0
-        print(f"已完成 k={k}的训练和预测")
-        print(f"训练花费{pred_t}秒")
-
         acc = accuracy_score(yte, y_pred)
-
-        rows.append({
+        row_data = {
             'k': k,
             'acc': acc,
             'pred_time_s': pred_t
-        })
+        }
+        if TOPK is not None:
+            row_data[f'top{TOPK}_acc'] = topk_acc
+        rows.append(row_data)
     summarize("== MyKNN summary ==", rows)
     return
 
@@ -374,14 +363,11 @@ def plot_confusion_matrix(y_true, y_pred, title="Confusion Matrix", save_path=No
 
 # ========= 主流程 =========
 def main():
-    # 1) 本地数据
     Xtr, ytr, Xte, yte = load_mnist_local(DATA_DIR)
 
-    # 2) （可选）PCA
     if USE_PCA:
         Xtr, Xte, _ = pca_reduce(Xtr, Xte, n_components=50)
 
-    # 3) 跑 baseline 或 走手写
     if USE_SKLEARN_BASELINE:
         print("\n=== Running sklearn KNN baseline ===")
         run_sklearn_knn(Xtr, ytr, Xte, yte, k_list=(1,3,5,7,9))
